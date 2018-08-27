@@ -57,6 +57,7 @@ import (
 	"github.com/cilium/cilium/pkg/policy"
 	"github.com/cilium/cilium/pkg/proxy/accesslog"
 	"github.com/cilium/cilium/pkg/u8proto"
+	"github.com/cilium/cilium/pkg/uuid"
 	"github.com/cilium/cilium/pkg/versioncheck"
 
 	go_version "github.com/hashicorp/go-version"
@@ -460,6 +461,9 @@ type Endpoint struct {
 	// egressPolicyEnabled specifies whether policy enforcement on egress
 	// is enabled for this endpoint.
 	egressPolicyEnabled bool
+
+	// uuid is the UUID of the endpoint. It is assigned via GetUUID()
+	uuid string
 
 	///////////////////////
 	// DEPRECATED FIELDS //
@@ -1789,7 +1793,9 @@ func (e *Endpoint) replaceIdentityLabels(l pkgLabels.Labels) int {
 func (e *Endpoint) LeaveLocked(owner Owner, proxyWaitGroup *completion.WaitGroup) []error {
 	errors := []error{}
 
-	owner.RemoveFromEndpointQueue(uint64(e.ID))
+	// Remove any eventual build queued
+	buildQueue.Remove(e)
+
 	if e.SecurityIdentity != nil && e.RealizedL4Policy != nil {
 		// Passing a new map of nil will purge all redirects
 		e.removeOldRedirects(owner, nil, proxyWaitGroup)
@@ -2741,4 +2747,18 @@ func (e *Endpoint) scrubIPsInConntrackTable() {
 	e.UnconditionalLock()
 	e.scrubIPsInConntrackTableLocked()
 	e.Unlock()
+}
+
+func (e *Endpoint) GetUUIDLocked() string {
+	if e.uuid == "" {
+		e.uuid = uuid.NewUUID().String()
+	}
+	return e.uuid
+
+}
+
+func (e *Endpoint) GetUUID() string {
+	e.UnconditionalLock()
+	defer e.Unlock()
+	return e.GetUUIDLocked()
 }

@@ -36,7 +36,6 @@ import (
 	"github.com/cilium/cilium/pkg/logging/logfields"
 	"github.com/cilium/cilium/pkg/maps/policymap"
 	"github.com/cilium/cilium/pkg/metrics"
-	"github.com/cilium/cilium/pkg/monitor"
 	"github.com/cilium/cilium/pkg/node"
 	"github.com/cilium/cilium/pkg/option"
 	"github.com/cilium/cilium/pkg/policy"
@@ -822,68 +821,7 @@ func (e *Endpoint) regenerate(owner Owner, context *RegenerationContext) (retErr
 // Should only be called with e.state == StateWaitingToRegenerate or with
 // e.state == StateWaitingForIdentity
 func (e *Endpoint) Regenerate(owner Owner, context *RegenerationContext) <-chan bool {
-	newReq := &Request{
-		ID:           uint64(e.ID),
-		MyTurn:       make(chan bool),
-		Done:         make(chan bool),
-		ExternalDone: make(chan bool),
-	}
-
-	go func(owner Owner, req *Request, e *Endpoint) {
-		var buildSuccess bool
-
-		err := e.RLockAlive()
-		if err != nil {
-			e.LogDisconnectedMutexAction(err, "before regeneration")
-			req.ExternalDone <- false
-			close(req.ExternalDone)
-			return
-		}
-		e.RUnlock()
-		scopedLog := e.getLogger()
-
-		// We should only queue the request after we use all the endpoint's
-		// lock/unlock. Otherwise this can get a deadlock if the endpoint is
-		// being deleted at the same time. More info PR-1777.
-		owner.QueueEndpointBuild(req)
-
-		isMyTurn, isMyTurnChanOK := <-req.MyTurn
-		if isMyTurnChanOK && isMyTurn {
-			scopedLog.Debug("Dequeued endpoint from build queue")
-
-			err := e.regenerate(owner, context)
-			repr, reprerr := monitor.EndpointRegenRepr(e, err)
-			if reprerr != nil {
-				scopedLog.WithError(reprerr).Warn("Notifying monitor about endpoint regeneration failed")
-			}
-
-			if err != nil {
-				buildSuccess = false
-				if reprerr == nil && !option.Config.DryMode {
-					owner.SendNotification(monitor.AgentNotifyEndpointRegenerateFail, repr)
-				}
-			} else {
-				buildSuccess = true
-				if reprerr == nil && !option.Config.DryMode {
-					owner.SendNotification(monitor.AgentNotifyEndpointRegenerateSuccess, repr)
-				}
-			}
-
-			req.Done <- buildSuccess
-		} else {
-			buildSuccess = false
-
-			scopedLog.Debug("My request was cancelled because I'm already in line")
-		}
-		// The external listener can ignore the channel so we need to
-		// make sure we don't block
-		select {
-		case req.ExternalDone <- buildSuccess:
-		default:
-		}
-		close(req.ExternalDone)
-	}(owner, newReq, e)
-	return newReq.ExternalDone
+	return buildQueue.Enqueue(e.newEndpointBuild(owner, context))
 }
 
 func (e *Endpoint) runIdentityToK8sPodSync() {
