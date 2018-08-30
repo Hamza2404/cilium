@@ -21,7 +21,9 @@ import (
 )
 
 var (
-	buildQueue = buildqueue.NewBuildQueue()
+	// BuildQueue is the endpoint build queue. It is also used to build
+	// base programs
+	BuildQueue = buildqueue.NewBuildQueue()
 )
 
 type endpointBuild struct {
